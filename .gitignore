@@ -1,0 +1,9 @@
+pycache/
+*.py[cod]
+.venv/
+venv/
+ENV/
+env/
+.DS_Store
+*.log
+reconex.log
