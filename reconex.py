@@ -45,10 +45,12 @@ console = Console()
 
 logger = logging.getLogger("reconex")
 logger.setLevel(logging.INFO)
-handler = RotatingFileHandler("reconex.log", maxBytes=1_000_000, backupCount=3)
-formatter = logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
-handler.setFormatter(formatter)
-logger.addHandler(handler)
+if not logger.handlers:
+    handler = RotatingFileHandler("reconex.log", maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+    formatter = logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.propagate = False
 
 # =====================================
 # UI / Banner
@@ -122,6 +124,7 @@ def _make_http_session(limit: int = 100, verify_ssl: bool = True, tool_name: str
     headers = {
         "User-Agent": f"Mozilla/5.0 ({tool_name})",
         "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
+        "Accept-Encoding": "identity",
     }
     return aiohttp.ClientSession(connector=connector, headers=headers, trust_env=True)
 
@@ -153,9 +156,10 @@ WAF_NETWORKS = {
         "120.52.22.96/27", "130.176.0.0/16", "143.204.0.0/16",
     ],
     "Fastly": [
-        "23.235.32.0/20", "43.249.72.0/22", "103.244.50.0/24", "108.162.192.0/18",
-        "131.0.72.0/22", "140.248.64.0/18", "146.75.0.0/16", "151.101.0.0/16",
+        "23.235.32.0/20", "43.249.72.0/22", "103.244.50.0/24",
+        "140.248.64.0/18", "146.75.0.0/16", "151.101.0.0/16",
         "157.52.64.0/18", "167.82.0.0/17", "167.82.128.0/17", "199.27.72.0/21",
+        # Note: removed Cloudflare ranges 108.162.192.0/18 and 131.0.72.0/22
     ],
     "Sucuri": [
         "192.124.249.0/24", "192.161.0.0/24", "192.88.134.0/24", "185.93.228.0/24",
@@ -175,6 +179,16 @@ WAF_NETWORKS = {
 WAF_NETS = {}
 for provider, networks in WAF_NETWORKS.items():
     WAF_NETS[provider] = [ip_network(net) for net in networks]
+
+# Provider aliasing to normalize labels
+PROVIDER_ALIASES = {
+    "Amazon CloudFront": "CloudFront",
+    "AWS CloudFront": "CloudFront",
+    "Imperva/Incapsula": "Imperva",
+}
+
+def _alias(provider: Optional[str]) -> Optional[str]:
+    return PROVIDER_ALIASES.get(provider, provider)
 
 # Enhanced CNAME patterns
 CNAME_HINTS = {
@@ -260,17 +274,16 @@ def _classify_by_headers_enhanced(headers: dict) -> Optional[str]:
     if "x-sp-server" in h:
         return "StackPath"
 
-    # Generic server header
-    server_lower = server.lower()
-    if "cloudflare" in server_lower:
+    # Generic server header (redundant but harmless guard)
+    if "cloudflare" in server:
         return "Cloudflare"
-    elif "akamai" in server_lower:
+    elif "akamai" in server:
         return "Akamai"
-    elif "cloudfront" in server_lower:
+    elif "cloudfront" in server:
         return "Amazon CloudFront"
-    elif "fastly" in server_lower:
+    elif "fastly" in server:
         return "Fastly"
-    elif "incapsula" in server_lower:
+    elif "incapsula" in server:
         return "Imperva/Incapsula"
 
     return None
@@ -317,7 +330,7 @@ async def _detect_by_fingerprint(host: str, session: aiohttp.ClientSession, time
 # Takeover detection (DNS + optional HTTP)
 # =====================================
 
-def detect_takeover(subdomain: str, nameserver: Optional[str] = None, timeout: int = 5) -> Optional[str]:
+def detect_takeover(subdomain: str, nameserver: Optional[str] = None, timeout: int = 5, require_http_signature: bool = True) -> Optional[str]:
     known_services = {
         "Amazon S3": "s3.amazonaws.com",
         "GitHub Pages": "github.io",
@@ -359,7 +372,10 @@ def detect_takeover(subdomain: str, nameserver: Optional[str] = None, timeout: i
         for scheme in ("https", "http"):
             url = f"{scheme}://{subdomain}"
             try:
-                req = urllib.request.Request(url, headers={"User-Agent": f"Mozilla/5.0 ({TOOL_NAME} TakeoverProbe)"})
+                req = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": f"Mozilla/5.0 ({TOOL_NAME} TakeoverProbe)", "Accept-Encoding": "identity"}
+                )
                 with urllib.request.urlopen(req, timeout=timeout, context=ctx if scheme == "https" else None) as resp:
                     body = resp.read(4096).decode("utf-8", errors="ignore")
                     if any(sig.lower() in body.lower() for sig in sig_list):
@@ -380,9 +396,13 @@ def detect_takeover(subdomain: str, nameserver: Optional[str] = None, timeout: i
             for service_name, indicator in known_services.items():
                 if indicator in cname:
                     sigs = takeover_signatures.get(service_name)
-                    if sigs and _http_probe(sigs):
+                    if sigs:
+                        if _http_probe(sigs):
+                            return service_name
+                        if require_http_signature:
+                            continue
+                    if not require_http_signature:
                         return service_name
-                    return service_name
     except Exception:
         pass
     return None
@@ -1093,6 +1113,7 @@ async def passive_enum(
     headers = {
         "User-Agent": f"Mozilla/5.0 ({tool_name})",
         "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
+        "Accept-Encoding": "identity",
     }
     client_timeout = aiohttp.ClientTimeout(total=timeout)
     results: Set[str] = set()
@@ -1210,6 +1231,7 @@ async def enhanced_waf_detect(host: str, nameserver: Optional[str], timeout: int
     for ip in ips:
         provider = _detect_waf_by_ip(ip)
         if provider:
+            provider = _alias(provider)
             detected_providers.add(provider)
             reasons.append(f"IP {ip} in {provider} netblock")
 
@@ -1218,6 +1240,7 @@ async def enhanced_waf_detect(host: str, nameserver: Optional[str], timeout: int
         cname_lower = cname.lower()
         for provider, patterns in CNAME_HINTS.items():
             if any(pattern in cname_lower for pattern in patterns):
+                provider = _alias(provider)
                 detected_providers.add(provider)
                 reasons.append(f"CNAME {cname} matches {provider} pattern")
                 break
@@ -1232,6 +1255,7 @@ async def enhanced_waf_detect(host: str, nameserver: Optional[str], timeout: int
 
     header_provider = _classify_by_headers_enhanced(headers) if headers else None
     if header_provider:
+        header_provider = _alias(header_provider)
         detected_providers.add(header_provider)
         reasons.append(f"Headers indicate {header_provider}")
 
@@ -1241,6 +1265,7 @@ async def enhanced_waf_detect(host: str, nameserver: Optional[str], timeout: int
             async with _make_http_session(limit=20, verify_ssl=verify_ssl, tool_name=tool_name) as session:
                 fingerprint_provider = await _detect_by_fingerprint(host, session, timeout)
                 if fingerprint_provider:
+                    fingerprint_provider = _alias(fingerprint_provider)
                     detected_providers.add(fingerprint_provider)
                     reasons.append(f"Fingerprint matches {fingerprint_provider}")
         except Exception as e:
@@ -1254,8 +1279,8 @@ async def enhanced_waf_detect(host: str, nameserver: Optional[str], timeout: int
         elif "Akamai" in detected_providers:
             final_provider = "Akamai"
             confidence = "high"
-        elif "Amazon CloudFront" in detected_providers:
-            final_provider = "Amazon CloudFront"
+        elif "CloudFront" in detected_providers:
+            final_provider = "CloudFront"
             confidence = "high"
         elif "Fastly" in detected_providers:
             final_provider = "Fastly"
@@ -1346,8 +1371,12 @@ def format_tech_output(tech_results: Dict[str, List[str]]) -> str:
             "Magento": "📱 CMS/Platform",
 
             "Cloudflare CDN": "🛡️ CDN/WAF",
+            "Cloudflare": "🛡️ CDN/WAF",
             "Akamai CDN": "🛡️ CDN/WAF",
+            "Akamai": "🛡️ CDN/WAF",
             "Fastly CDN": "🛡️ CDN/WAF",
+            "Fastly": "🛡️ CDN/WAF",
+            "CloudFront": "🛡️ CDN/WAF",
 
             "Google Analytics / GTM": "📊 Analytics/Tracking",
             "Matomo": "📊 Analytics/Tracking",
@@ -1360,10 +1389,6 @@ def format_tech_output(tech_results: Dict[str, List[str]]) -> str:
             "Netlify": "🔧 Development Tools",
             "Heroku": "🔧 Development Tools",
             "Azure App Service": "🔧 Development Tools",
-            "Cloudflare": "🔧 Development Tools",
-
-            "WP Rocket": "📦 Other Technologies",
-            "Yoast SEO": "📦 Other Technologies",
         }
 
         for tech in techs:
@@ -1418,6 +1443,7 @@ def _heuristic_tech(headers: dict, html: str, final_url: Optional[str]) -> list[
     h = {k.lower(): v for k, v in (headers or {}).items()}
     server = h.get("server", "").lower()
     xpb = h.get("x-powered-by", "").lower()
+    via = h.get("via", "").lower()
     set_cookie_list = h.get("set-cookie", []) if isinstance(h.get("set-cookie"), list) else []
     cookies = _parse_set_cookie_names(set_cookie_list)
 
@@ -1441,6 +1467,8 @@ def _heuristic_tech(headers: dict, html: str, final_url: Optional[str]) -> list[
         techs.add("Akamai CDN")
     if "fastly" in server:
         techs.add("Fastly CDN")
+    if "cloudfront" in server or "cloudfront" in via:
+        techs.add("CloudFront")
 
     if "express" in xpb or "express" in server:
         techs.add("Express")
@@ -1566,7 +1594,7 @@ def _heuristic_tech(headers: dict, html: str, final_url: Optional[str]) -> list[
             techs.add("Matomo")
         if "hotjar" in assets or "static.hotjar.com" in assets:
             techs.add("Hotjar")
-        if "hs-scripts.com" in assets or "hubspt" in html_l:
+        if "hs-scripts.com" in assets or "hubspot" in html_l:
             techs.add("HubSpot")
         if "facebook.com/tr/" in html_l or "fbq('init'" in html_l:
             techs.add("Facebook Pixel")
@@ -1583,7 +1611,7 @@ def _heuristic_tech(headers: dict, html: str, final_url: Optional[str]) -> list[
         if ".azurewebsites.net" in final_url:
             techs.add("Azure App Service")
         if ".cloudflare.com" in final_url or ".cloudflareaccess.com" in final_url:
-            techs.add("Cloudflare")
+            techs.add("Cloudflare CDN")
 
     return sorted(techs)
 
@@ -1874,7 +1902,7 @@ def takeover_check_from_file(file_path: str, nameserver: Optional[str], timeout:
 
     console.print("\n[bold]🔐 Subdomain Takeover Check:[/bold]\n")
     for domain in domains:
-        service = detect_takeover(domain, nameserver=nameserver, timeout=timeout)
+        service = detect_takeover(domain, nameserver=nameserver, timeout=timeout, require_http_signature=True)
         if service:
             console.print(f"[yellow][Takeover Risk][/yellow] {domain} ➜ {service}")
         else:
@@ -1952,8 +1980,9 @@ async def check_live_from_file(file_path: str, concurrency: int = 100, verify_ss
 async def main():
     parser = argparse.ArgumentParser(description="Reconex — Advanced Subdomain Recon")
     parser.add_argument("-d", "--domain", help="Target domain")
+    parser.add_argument("-dL", "--domains-list", dest="domains_list", metavar="FILE", help="File with domains to enumerate (one per line)")
     parser.add_argument("-w", "--wordlist", help="Wordlist file for brute-forcing")
-    parser.add_argument("-o", "--output", help="Save results (subdomain list) to file")
+    parser.add_argument("-o", "--output", help="Save results to file; with -dL, treat as directory for per-domain files")
     parser.add_argument("--json-output", "-J", help="Save structured JSON results to file")
 
     parser.add_argument("--passive", action="store_true", help="Enable passive enumeration")
@@ -1974,7 +2003,7 @@ async def main():
     parser.add_argument("--dns-resolver", help="Custom DNS resolver (e.g., 8.8.8.8)")
     parser.add_argument("--takeover", help="Check for potential subdomain takeovers (single domain or file path)")
     parser.add_argument("--recursive", action="store_true", help="Perform recursive subdomain enumeration")
-    parser.add_argument("--waf-check", action="store_true", help="Detect WAF/CDN on the target domain only")
+    parser.add_argument("--waf-check", action="store_true", help="Detect WAF/CDN on the target domain(s)")
     parser.add_argument("--tech-detect", action="store_true", help="Detect web technologies (heuristic)")
     parser.add_argument("--mode", choices=["light", "aggressive"], help="Scan mode presets")
     parser.add_argument("--resolve", action="store_true", help="Resolve and keep only DNS-valid subdomains (A/AAAA or CNAME→A/AAAA)")
@@ -1996,7 +2025,25 @@ async def main():
 
     tool_name = args.name or TOOL_NAME
 
-    if args.domain and not any([args.passive, args.active, args.all, args.live, args.takeover, args.waf_check, args.tech_detect]):
+    # Build target domain list
+    target_domains: List[str] = []
+    if args.domain:
+        target_domains.append(args.domain.strip())
+    if args.domains_list:
+        if not os.path.isfile(args.domains_list):
+            console.print(f"[bold red]❌ Domains list file not found: {args.domains_list}[/bold red]")
+            return
+        with open(args.domains_list, "r", encoding="utf-8", errors="ignore") as df:
+            for line in df:
+                d = line.strip()
+                if d:
+                    target_domains.append(d)
+        # Deduplicate while preserving order
+        seen = set()
+        target_domains = [d for d in target_domains if not (d in seen or seen.add(d))]
+
+    # Default to passive if domain(s) provided without other mode flags
+    if target_domains and not any([args.passive, args.active, args.all, args.live, args.takeover, args.waf_check, args.tech_detect]):
         args.passive = True
         if not args.silent:
             console.print("[italic cyan]No mode flags provided; defaulting to passive enumeration.[/italic cyan]")
@@ -2005,62 +2052,7 @@ async def main():
         console.print(render_banner(TOOL_VERSION, name=tool_name, author="R3XD17"))
         console.print(render_legend())
 
-    # Prepare holders so we can include in JSON
-    waf_result: Optional[Dict[str, Any]] = None
-    tech_map: Optional[Dict[str, List[str]]] = None
-
-    # WAF check (can be combined with other flags)
-    if args.waf_check:
-        if not args.domain:
-            console.print("[bold red]Error: --waf-check requires -d/--domain.[/bold red]")
-            return
-        result = await enhanced_waf_detect(
-            args.domain.strip(),
-            nameserver=args.dns_resolver,
-            timeout=args.timeout,
-            verify_ssl=not args.no_verify,
-            tool_name=tool_name,
-        )
-        waf_result = result
-
-        confidence_color = {
-            "high": "green",
-            "medium": "yellow",
-            "low": "red"
-        }.get(result["confidence"], "white")
-
-        console.print(f"[blue][WAF][/blue] {result['host']} ➜ [{confidence_color}]{result['provider']} ({result['confidence']} confidence)[/{confidence_color}]")
-
-        if result["ips"]:
-            console.print(f"  IPs: {', '.join(result['ips'])}")
-        if result["cnames"]:
-            console.print(f"  CNAMEs: {', '.join(result['cnames'])}")
-        if result["reasons"]:
-            console.print("  Detection Signals:")
-            for r in result["reasons"]:
-                console.print(f"   • {r}")
-        if result["headers_sample"]:
-            console.print("  Sample Headers:")
-            for k, v in list(result["headers_sample"].items())[:4]:
-                console.print(f"   • {k}: {v}")
-        # No return here so other flags (like --tech-detect) can run
-
-    # Tech detection for single host (also runs alongside --waf-check)
-    if args.tech_detect and not any([args.passive, args.active, args.all]):
-        if not args.domain:
-            console.print("[bold red]Error: --tech-detect requires -d/--domain.[/bold red]")
-            return
-        async with _make_http_session(limit=10, verify_ssl=not args.no_verify, tool_name=tool_name) as session:
-            res = await tech_detect_single_host(args.domain.strip(), session, timeout=args.timeout)
-
-        tech_map = {res['host']: res.get("tech", [])}
-        console.print("\n[bold green]🔧 Technology Stack Analysis[/bold green]")
-        console.print("=" * 60)
-        formatted_output = format_tech_output(tech_map)
-        console.print(formatted_output)
-        console.print("=" * 60)
-        # No return here so you can combine with other flags
-
+    # Early actions that use external files
     if args.live:
         await check_live_from_file(args.live, concurrency=args.concurrency, verify_ssl=not args.no_verify, silent=args.silent, tool_name=tool_name)
         return
@@ -2072,102 +2064,240 @@ async def main():
         else:
             target = args.takeover.strip()
             console.print("\n[bold]🔐 Subdomain Takeover Check (single domain):[/bold]\n")
-            service = detect_takeover(target, nameserver=args.dns_resolver, timeout=args.timeout)
+            service = detect_takeover(target, nameserver=args.dns_resolver, timeout=args.timeout, require_http_signature=True)
             if service:
                 console.print(f"[yellow][Takeover Risk][/yellow] {target} ➜ {service}")
             else:
                 console.print(f"[green][Safe][/green] {target}")
+            return
 
-    if not args.domain and not args.live and not args.takeover:
-        console.print("[red]Error: Please specify a domain using -d or use --live or --takeover with file.")
+    # Nothing to do?
+    if not target_domains:
+        console.print("[red]Error: Please specify a domain using -d or a domains list with -dL; or use --live/--takeover with file.[/red]")
         return
 
-    if args.all:
-        args.passive = True
-        args.active = True
+    # Prepare holders so we can include in JSON
+    batch_mode = bool(args.domains_list)
+    waf_result_single: Optional[Dict[str, Any]] = None
+    waf_results_map: Dict[str, Dict[str, Any]] = {}
 
-    all_subdomains = set()
-    passive_subs: List[str] = []
-    active_subs: List[str] = []
-    resolved_details: Optional[Dict[str, Dict[str, List[str]]]] = None
-
-    if args.passive:
-        subs = await passive_enum(
-            args.domain,
-            timeout=args.timeout,
-            retries=5,
-            delay=args.delay,
-            silent=args.silent,
-            verify_ssl=not args.no_verify,
-            experimental_sources=args.experimental_sources,
-            tool_name=tool_name,
-        )
-        passive_subs = subs
-        all_subdomains.update(subs)
-        for sub in subs:
-            console.print(f"{sub}")
-
-    if args.active and args.wordlist:
-        subs = await active_enum(args.domain, args.wordlist, nameserver=args.dns_resolver, concurrency=args.concurrency, timeout=args.timeout, silent=args.silent)
-        active_subs = subs
-        all_subdomains.update(subs)
-        for sub in subs:
-            console.print(f"{sub}")
-
-    if args.resolve:
-        if not all_subdomains:
-            console.print("[yellow]No subdomains collected to resolve.[/yellow]")
-        else:
-            resolved_details = await resolve_dns_filter(
-                sorted(all_subdomains),
+    # WAF check (single or batch)
+    if args.waf_check:
+        if not args.silent:
+            console.print("[bold blue]WAF/CDN detection[/bold blue]")
+        for d in target_domains:
+            result = await enhanced_waf_detect(
+                d,
                 nameserver=args.dns_resolver,
                 timeout=args.timeout,
-                concurrency=args.concurrency,
-                silent=args.silent
+                verify_ssl=not args.no_verify,
+                tool_name=tool_name,
             )
-            before = len(all_subdomains)
-            all_subdomains = set(resolved_details.keys())
-            after = len(all_subdomains)
-            console.print(f"\n[bold green]DNS validation complete:[/bold green] Kept {after} of {before} subdomains.\n")
-            for sub in sorted(all_subdomains):
-                console.print(sub)
+            waf_results_map[d] = result
+            if len(target_domains) == 1:
+                waf_result_single = result
 
-    if (args.passive or args.active) and not all_subdomains:
-        console.print("[yellow]No subdomains found. Try increasing --timeout, adding --delay (e.g., 0.2), or using --resolve with --dns-resolver 1.1.1.1.[/yellow]")
+            confidence_color = {
+                "high": "green",
+                "medium": "yellow",
+                "low": "red"
+            }.get(result["confidence"], "white")
 
-    # Batch Technology Detection if we have subdomains and --tech-detect was requested
-    if args.tech_detect and all_subdomains:
-        tech_map = await tech_detect_batch(sorted(all_subdomains), timeout=args.timeout, concurrency=args.concurrency, verify_ssl=not args.no_verify, silent=args.silent, tool_name=tool_name)
-        console.print("\n[bold green]🔧 Technology Stack Analysis[/bold green]")
+            console.print(f"[blue][WAF][/blue] {result['host']} ➜ [{confidence_color}]{result['provider']} ({result['confidence']} confidence)[/{confidence_color}]")
+            if result["ips"]:
+                console.print(f"  IPs: {', '.join(result['ips'])}")
+            if result["cnames"]:
+                console.print(f"  CNAMEs: {', '.join(result['cnames'])}")
+            if result["reasons"]:
+                console.print("  Detection Signals:")
+                for r in result["reasons"]:
+                    console.print(f"   • {r}")
+            if result["headers_sample"]:
+                console.print("  Sample Headers:")
+                for k, v in list(result["headers_sample"].items())[:4]:
+                    console.print(f"   • {k}: {v}")
+
+    # Tech-detect only (no enumeration flags)
+    tech_roots_map: Optional[Dict[str, List[str]]] = None
+    if args.tech_detect and not any([args.passive, args.active, args.all]):
+        tech_roots_map = {}
+        async with _make_http_session(limit=min(20, args.concurrency), verify_ssl=not args.no_verify, tool_name=tool_name) as session:
+            tasks = [tech_detect_single_host(d, session, timeout=args.timeout) for d in target_domains]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for r in results:
+                if isinstance(r, Exception):
+                    continue
+                tech_roots_map[r["host"]] = r.get("tech", [])
+        console.print("\n[bold green]🔧 Technology Stack Analysis (roots)[/bold green]")
         console.print("=" * 60)
-        formatted_output = format_tech_output(tech_map)
-        console.print(formatted_output)
+        console.print(format_tech_output(tech_roots_map))
         console.print("=" * 60)
+        # Continue: they may also want enumeration below if flags were passed; here they weren't, so we return
+        if not (args.passive or args.active or args.all):
+            # If only tech-detect on roots, we can still emit JSON if requested
+            if args.json_output:
+                out_obj: Dict[str, Any] = {
+                    "tool": tool_name,
+                    "version": TOOL_VERSION,
+                    "domains": {k: {"tech_root": v} for k, v in (tech_roots_map or {}).items()},
+                    "waf": waf_results_map or {},
+                }
+                with open(args.json_output, "w", encoding="utf-8") as jf:
+                    json.dump(out_obj, jf, indent=2, sort_keys=True)
+                console.print(f"[green]Saved JSON results to {args.json_output}[/green]")
+            return
 
-    if args.recursive:
-        for sub in all_subdomains:
-            recursed = recursive_enum(sub)
-            for r in recursed:
-                console.print(f"[magenta][Recursive][/magenta] {r}")
+    # Enumeration (single or batch)
+    # Decide output directory if -dL and -o looks like directory
+    per_domain_output_dir: Optional[str] = None
+    if args.output and batch_mode:
+        outp = args.output
+        if outp.endswith(os.sep) or (os.path.exists(outp) and os.path.isdir(outp)):
+            per_domain_output_dir = outp if outp.endswith(os.sep) else outp + os.sep
+            os.makedirs(per_domain_output_dir, exist_ok=True)
 
-    if args.output:
-        with open(args.output, 'w', encoding='utf-8') as f:
-            for sub in sorted(all_subdomains):
-                f.write(sub + '\n')
-        console.print(f"\n[green]Saved results to {args.output}[/green]")
+    # Accumulators
+    aggregate_all_subdomains: Set[str] = set()
+    domains_data: Dict[str, Dict[str, Any]] = {}
 
-    if args.json_output:
-        out_obj: Dict[str, Any] = {
-            "tool": tool_name,
-            "version": TOOL_VERSION,
-            "domain": args.domain,
+    for d in target_domains:
+        all_subdomains = set()
+        passive_subs: List[str] = []
+        active_subs: List[str] = []
+        resolved_details: Optional[Dict[str, Dict[str, List[str]]]] = None
+
+        if args.passive:
+            subs = await passive_enum(
+                d,
+                timeout=args.timeout,
+                retries=5,
+                delay=args.delay,
+                silent=args.silent,
+                verify_ssl=not args.no_verify,
+                experimental_sources=args.experimental_sources,
+                tool_name=tool_name,
+            )
+            passive_subs = subs
+            all_subdomains.update(subs)
+            for sub in subs:
+                console.print(f"{sub}")
+
+        if args.active and args.wordlist:
+            subs = await active_enum(d, args.wordlist, nameserver=args.dns_resolver, concurrency=args.concurrency, timeout=args.timeout, silent=args.silent)
+            active_subs = subs
+            all_subdomains.update(subs)
+            for sub in subs:
+                console.print(f"{sub}")
+
+        if args.resolve:
+            if not all_subdomains:
+                console.print(f"[yellow]No subdomains collected to resolve for {d}.[/yellow]")
+            else:
+                resolved_details = await resolve_dns_filter(
+                    sorted(all_subdomains),
+                    nameserver=args.dns_resolver,
+                    timeout=args.timeout,
+                    concurrency=args.concurrency,
+                    silent=args.silent
+                )
+                before = len(all_subdomains)
+                all_subdomains = set(resolved_details.keys())
+                after = len(all_subdomains)
+                console.print(f"\n[bold green]DNS validation complete ({d}):[/bold green] Kept {after} of {before} subdomains.\n")
+                for sub in sorted(all_subdomains):
+                    console.print(sub)
+
+        if (args.passive or args.active) and not all_subdomains:
+            console.print(f"[yellow]No subdomains found for {d}. Try increasing --timeout, adding --delay (e.g., 0.2), or using --resolve with --dns-resolver 1.1.1.1.[/yellow]")
+
+        # Save per-domain plain text if requested as directory
+        if per_domain_output_dir is not None:
+            out_path = os.path.join(per_domain_output_dir, f"{d}.txt")
+            with open(out_path, "w", encoding="utf-8") as f:
+                for sub in sorted(all_subdomains):
+                    f.write(sub + "\n")
+            console.print(f"[green]Saved {d} results to {out_path}[/green]")
+
+        # Store per-domain data for JSON
+        domains_data[d] = {
             "passive": passive_subs,
             "active": active_subs,
             "resolved": resolved_details or {},
-            "tech": tech_map or {},
-            "waf": waf_result or {},
+            "tech": {},  # filled later if tech-detect on subdomains
+            "waf": waf_results_map.get(d, {}),
             "total_unique": len(all_subdomains),
         }
+
+        # Recursive enumeration (print only)
+        if args.recursive:
+            for sub in sorted(all_subdomains):
+                recursed = recursive_enum(sub)
+                for r in recursed:
+                    console.print(f"[magenta][Recursive][/magenta] {r}")
+
+        aggregate_all_subdomains.update(all_subdomains)
+
+    # Batch Technology Detection for subdomains (if requested)
+    if args.tech_detect and aggregate_all_subdomains:
+        tech_map_all = await tech_detect_batch(
+            sorted(aggregate_all_subdomains),
+            timeout=args.timeout,
+            concurrency=args.concurrency,
+            verify_ssl=not args.no_verify,
+            silent=args.silent,
+            tool_name=tool_name
+        )
+        console.print("\n[bold green]🔧 Technology Stack Analysis (subdomains)[/bold green]")
+        console.print("=" * 60)
+        console.print(format_tech_output(tech_map_all))
+        console.print("=" * 60)
+
+        # Split tech_map back per domain
+        for d in target_domains:
+            per_domain_hosts = {h: t for h, t in tech_map_all.items() if h == d or h.endswith("." + d)}
+            domains_data[d]["tech"] = per_domain_hosts
+
+    # Combined outputs if single-file paths are provided
+    if args.output and not batch_mode:
+        with open(args.output, 'w', encoding='utf-8') as f:
+            # Single domain mode: write only that domain's subdomains
+            d = target_domains[0]
+            subs = set(domains_data[d]["resolved"].keys()) if args.resolve else set(domains_data[d]["passive"]) | set(domains_data[d]["active"])
+            for sub in sorted(subs):
+                f.write(sub + '\n')
+        console.print(f"\n[green]Saved results to {args.output}[/green]")
+    elif args.output and batch_mode and per_domain_output_dir is None:
+        # Combined aggregated subdomains to a single file
+        with open(args.output, "w", encoding="utf-8") as f:
+            for sub in sorted(aggregate_all_subdomains):
+                f.write(sub + "\n")
+        console.print(f"\n[green]Saved aggregated results to {args.output}[/green]")
+
+    # JSON output (single vs batch)
+    if args.json_output:
+        if batch_mode:
+            out_obj: Dict[str, Any] = {
+                "tool": tool_name,
+                "version": TOOL_VERSION,
+                "domains": domains_data,
+                "waf": waf_results_map,
+                "aggregate": {
+                    "total_unique_subdomains": len(aggregate_all_subdomains),
+                }
+            }
+        else:
+            d = target_domains[0]
+            out_obj = {
+                "tool": tool_name,
+                "version": TOOL_VERSION,
+                "domain": d,
+                "passive": domains_data[d]["passive"],
+                "active": domains_data[d]["active"],
+                "resolved": domains_data[d]["resolved"],
+                "tech": domains_data[d]["tech"],
+                "waf": waf_result_single or {},
+                "total_unique": domains_data[d]["total_unique"],
+            }
         with open(args.json_output, "w", encoding="utf-8") as jf:
             json.dump(out_obj, jf, indent=2, sort_keys=True)
         console.print(f"[green]Saved JSON results to {args.json_output}[/green]")
