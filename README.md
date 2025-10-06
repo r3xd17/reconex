@@ -7,14 +7,14 @@ Advanced subdomain reconnaissance tool with passive/active enumeration, DNS vali
 
 ✨ Features
 
-Passive enum from many sources: crt.sh, CertSpotter, BufferOver, Omnisint, RapidDNS, ThreatCrowd, ThreatMiner, Sublist3r API, Wayback, urlscan, OTX, SiteDossier (+ optional VirusTotal UI, c99.nl)
-Active brute-force enum with concurrency
-DNS validation: keep only A/AAAA or CNAME→A/AAAA
-WAF/CDN detection: Cloudflare, Akamai, CloudFront, Fastly, Imperva, Sucuri, Azure Front Door, Google Cloud CDN
-Technology heuristics: servers, frameworks, CMS, analytics, DevOps platforms
-Live probe (HTTP/HTTPS) and subdomain takeover checks
-Batch mode (-dL) for multiple root domains; per-domain or aggregated outputs
-Rich CLI UX: color output, progress bars, JSON export
+Passive enum from many sources: crt.sh, CertSpotter, BufferOver, Omnisint, RapidDNS, ThreatCrowd, ThreatMiner, Sublist3r API, Wayback, urlscan, OTX, SiteDossier (+ optional VirusTotal UI, c99.nl)\n
+Active brute-force enum with concurrency\n
+DNS validation: keep only A/AAAA or CNAME→A/AAAA\n
+WAF/CDN detection: Cloudflare, Akamai, CloudFront, Fastly, Imperva, Sucuri, Azure Front Door, Google Cloud CDN \n
+Technology heuristics: servers, frameworks, CMS, analytics, DevOps platforms \n
+Live probe (HTTP/HTTPS) and subdomain takeover checks \n
+Batch mode (-dL) for multiple root domains; per-domain or aggregated outputs\n
+Rich CLI UX: color output, progress bars, JSON export\n
 
 📦 Install
 
