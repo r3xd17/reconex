@@ -1,10 +1,12 @@
 
 Reconex
+
 Advanced subdomain reconnaissance tool with passive/active enumeration, DNS validation, WAF/CDN fingerprinting, tech stack detection, live probes, and subdomain takeover checks. 
 
 
 
 ✨ Features
+
 Passive enum from many sources: crt.sh, CertSpotter, BufferOver, Omnisint, RapidDNS, ThreatCrowd, ThreatMiner, Sublist3r API, Wayback, urlscan, OTX, SiteDossier (+ optional VirusTotal UI, c99.nl)
 Active brute-force enum with concurrency
 DNS validation: keep only A/AAAA or CNAME→A/AAAA
@@ -13,13 +15,14 @@ Technology heuristics: servers, frameworks, CMS, analytics, DevOps platforms
 Live probe (HTTP/HTTPS) and subdomain takeover checks
 Batch mode (-dL) for multiple root domains; per-domain or aggregated outputs
 Rich CLI UX: color output, progress bars, JSON export
+
 📦 Install
-Bash
 
 git clone https://github.com/r3xd17/reconex.git
 cd reconex
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+
 🚀 Quick start
 Single domain (defaults to passive if no mode flags):
 Bash
@@ -54,7 +57,9 @@ Bash
 
 python3 reconex.py --takeover docs.example.com
 python3 reconex.py --takeover subs.txt
+
 🧰 Command reference
+
 Flag	Description
 -d, --domain DOMAIN	Target root domain
 -dL, --domains-list FILE	File of root domains (one per line)
@@ -104,14 +109,17 @@ JSON
   "total_unique": 3
 }
 Batch JSON (domains.txt): domains object per root plus aggregate counts.
+
 🧪 Tips & performance
 If sources throttle or you get timeouts: increase --timeout and add --delay 0.2
 Use --dns-resolver 1.1.1.1 for faster DNS in some environments
 For large wordlists, keep concurrency around 100–300; watch your resolver’s rate limits
 Batch mode + per-domain files: pass -o out_dir/ (trailing slash)
+
 🔐 Responsible use
 Use only against assets you own or are authorized to test
 Respect third-party data sources’ ToS and rate limits
+
 🐛 Troubleshooting
 SSL certificate issues: try --no-verify (only if you understand the risks)
 Low results: increase --timeout, add --delay 0.2, use --resolve, or try another DNS via --dns-resolver
