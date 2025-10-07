@@ -1,139 +1,135 @@
+# 🔍 Reconex
 
-Reconex
+**Advanced subdomain reconnaissance tool with comprehensive enumeration, validation, and analysis capabilities**
 
-Advanced subdomain reconnaissance tool with passive/active enumeration, DNS validation, WAF/CDN fingerprinting, tech stack detection, live probes, and subdomain takeover checks. 
+![Python Version](https://img.shields.io/badge/python-3.7+-blue.svg)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 
+Reconex is a powerful subdomain reconnaissance tool that combines passive enumeration, active brute-forcing, DNS validation, and security analysis to provide comprehensive attack surface mapping.
 
+## ✨ Features
 
-✨ Features
+### 🎯 Enumeration
+- **Passive Intelligence**: Gather subdomains from 15+ sources (crt.sh, CertSpotter, Wayback Machine, urlscan, OTX, etc.)
+- **Active Brute-forcing**: High-performance wordlist-based enumeration with configurable concurrency
+- **Hybrid Mode**: Combine passive and active approaches for maximum coverage
+- **Batch Processing**: Handle multiple root domains efficiently
 
-Passive enum from many sources: crt.sh, CertSpotter, BufferOver, Omnisint, RapidDNS, ThreatCrowd, ThreatMiner, Sublist3r API, Wayback, urlscan, OTX, SiteDossier (+ optional VirusTotal UI, c99.nl)\n
-Active brute-force enum with concurrency\n
-DNS validation: keep only A/AAAA or CNAME→A/AAAA\n
-WAF/CDN detection: Cloudflare, Akamai, CloudFront, Fastly, Imperva, Sucuri, Azure Front Door, Google Cloud CDN \n
-Technology heuristics: servers, frameworks, CMS, analytics, DevOps platforms \n
-Live probe (HTTP/HTTPS) and subdomain takeover checks \n
-Batch mode (-dL) for multiple root domains; per-domain or aggregated outputs\n
-Rich CLI UX: color output, progress bars, JSON export\n
+### 🔍 Validation & Analysis
+- **DNS Validation**: Filter results to only resolvable subdomains (A/AAAA records or CNAME chains)
+- **WAF/CDN Detection**: Identify Cloudflare, Akamai, CloudFront, Fastly, Imperva, and more
+- **Technology Stack Detection**: Fingerprint servers, frameworks, CMS, analytics, and DevOps platforms
+- **Live Probes**: HTTP/HTTPS connectivity checks
+- **Takeover Detection**: Identify vulnerable subdomains for potential takeover
 
-📦 Install
+### 💾 Output & Usability
+- **Flexible Output**: Plain text, structured JSON, per-domain files in batch mode
+- **Rich CLI Experience**: Color output, progress bars, and intuitive interface
+- **Performance Optimized**: Configurable timeouts, delays, and concurrency controls
 
+## 🚀 Quick Installation
+
+```bash
 git clone https://github.com/r3xd17/reconex.git
 cd reconex
-python3 -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+```
+## 🧰 Command Reference
+```bash
+Flag                                  Description
 
-🚀 Quick start
-Single domain (defaults to passive if no mode flags):
-Bash
-
+-d,--domain                    DOMAIN	Target root domain
+-dL,--domains-list             FILE	File of root domains (one per line)
+-w,--wordlist                  FILE	Wordlist for active brute-force
+--passive	                   Enable passive enumeration
+--active	                   Enable active enumeration
+--all	                       Passive + active
+--resolve	                   Keep only DNS-valid hosts (A/AAAA or CNAME → A/AAAA)
+--dns-resolver                 IPCustom DNS resolver (e.g., 1.1.1.1)
+--tech-detect	               Technology fingerprinting
+--waf-check	                   WAF/CDN detection on root domains
+--takeover                     TARGET_OR_FILE	Subdomain takeover check (single or file)
+--live                         FILE	Probe HTTP/HTTPS liveness from list
+-o,--output                    PATH	Output file; with -dL, if PATH ends with “/” or is a directory, write per-domain files inside
+-J,--json-output               FILE	Save structured JSON
+--concurrency/--threads        N Concurrency (default 100)
+--timeout                      SECONDS	Timeout per request (default 10)
+--delay                        SECONDS	Delay between requests (default 0)
+--mode                         light/aggressive	Presets (light lowers timeouts and concurrency)
+--silent	                   Minimal console/UI
+--no-verify	                   Disable TLS certificate verification
+--name                         NAME	Override tool name in banner/User-Agent
+```
+## 📖 Usage Examples
+```bash
+# Single domain (defaults to passive if no mode flags)
 python3 reconex.py -d example.com
-Passive + resolve (DNS-valid only), save JSON:
-Bash
 
+# Passive + resolve (DNS-valid only), save JSON
 python3 reconex.py -d example.com --passive --resolve -J results.json
-Active + passive with a wordlist:
-Bash
 
+# Active + passive with a wordlist
 python3 reconex.py -d example.com --all -w words.txt --resolve
-Batch mode from a list of roots; save per-domain files into a directory:
-Bash
 
+# Batch mode from a list of roots; save per-domain files
 python3 reconex.py -dL domains.txt --passive --resolve -o out_dir/
-WAF/CDN detection:
-Bash
 
+# WAF/CDN detection
 python3 reconex.py -d example.com --waf-check
-Tech stack detection (on subdomains if enumerated, on roots only if no enumeration flags):
-Bash
 
+# Tech stack detection
 python3 reconex.py -d example.com --tech-detect
-Live check (HTTP/HTTPS) from a file of subdomains:
-Bash
 
+# Live check from a file of subdomains
 python3 reconex.py --live subdomains.txt
-Subdomain takeover check for a single domain or a list file:
-Bash
 
+# Subdomain takeover check
 python3 reconex.py --takeover docs.example.com
 python3 reconex.py --takeover subs.txt
+```
 
-🧰 Command reference
+## 🧪 Tips & Performance
 
-Flag	Description
--d, --domain DOMAIN	Target root domain
--dL, --domains-list FILE	File of root domains (one per line)
--w, --wordlist FILE	Wordlist for active brute-force
---passive	Enable passive enumeration
---active	Enable active enumeration
---all	Passive + active
---experimental-sources	Include VT UI and c99.nl scrapers
---resolve	Keep only DNS-valid hosts (A/AAAA or CNAME→A/AAAA)
---dns-resolver IP	Custom DNS resolver (e.g., 1.1.1.1)
---tech-detect	Technology fingerprinting
---waf-check	WAF/CDN detection on root domains
---takeover TARGET_OR_FILE	Subdomain takeover check (single or file)
---live FILE	Probe HTTP/HTTPS liveness from list
--o, --output PATH	Output file; with -dL, if PATH ends with “/” or is a directory, write per-domain files inside
--J, --json-output FILE	Save structured JSON
---concurrency/--threads N	Concurrency (default 100)
---timeout SECONDS	Timeout per request (default 10)
---delay SECONDS	Delay between requests (default 0)
---mode light/aggressive	Presets (light lowers timeouts and concurrency)
---silent	Minimal console/UI
---no-verify	Disable TLS certificate verification
---name NAME	Override tool name in banner/User-Agent
-📄 Output examples
-Plain text: one subdomain per line
-JSON: structured output. Example (single domain):
-JSON
+- **Timeout Handling**: If sources throttle or you get timeouts, increase `--timeout` and add `--delay 0.2`
+- **DNS Optimization**: Use `--dns-resolver 1.1.1.1` for faster DNS resolution in some environments
+- **Concurrency Management**: For large wordlists, keep concurrency around 100–300; watch your resolver's rate limits
+- **Batch Processing**: Use `-o out_dir/` (trailing slash) for per-domain files in batch mode
 
-{
-  "tool": "Reconex",
-  "version": "1.1",
-  "domain": "example.com",
-  "passive": ["a.example.com", "b.example.com"],
-  "active": ["c.example.com"],
-  "resolved": {
-    "a.example.com": {"A": ["93.184.216.34"], "AAAA": [], "CNAME": []}
-  },
-  "tech": {
-    "a.example.com": ["Nginx", "Cloudflare CDN", "WordPress"]
-  },
-  "waf": {
-    "host": "example.com",
-    "provider": "Cloudflare",
-    "confidence": "high",
-    "detected_providers": ["Cloudflare"]
-  },
-  "total_unique": 3
-}
-Batch JSON (domains.txt): domains object per root plus aggregate counts.
+## 🐛 Troubleshooting
 
-🧪 Tips & performance
-If sources throttle or you get timeouts: increase --timeout and add --delay 0.2
-Use --dns-resolver 1.1.1.1 for faster DNS in some environments
-For large wordlists, keep concurrency around 100–300; watch your resolver’s rate limits
-Batch mode + per-domain files: pass -o out_dir/ (trailing slash)
+- **SSL Certificate Issues**: Try `--no-verify` (only if you understand the risks)
+- **Low Results**: 
+  - Increase `--timeout`
+  - Add `--delay 0.2`
+  - Use `--resolve` to keep DNS-valid hosts
+  - Try a different DNS via `--dns-resolver`
+- **Connectivity Issues**:
+  - Run via a network with fewer egress restrictions
+  - Adjust VPN/proxy settings
 
-🔐 Responsible use
-Use only against assets you own or are authorized to test
-Respect third-party data sources’ ToS and rate limits
+## 🔐 Responsible Use
 
-🐛 Troubleshooting
-SSL certificate issues: try --no-verify (only if you understand the risks)
-Low results: increase --timeout, add --delay 0.2, use --resolve, or try another DNS via --dns-resolver
+- Only test assets you own or are explicitly authorized to assess
+- Respect third-party data sources' terms of service and rate limits
 
-🤝 Contributing
-PRs welcome! Please:
+## 🤝 Contributing
 
-📜 License
-MIT — see LICENSE.
+Contributions are welcome! Please:
+- Follow existing code style conventions
+- Add tests for new features
+- Update documentation accordingly
 
-Example banner:
 
-╔══════════════════════════════════╗
-║    ╭─[ Reconex ]────────────────╮║
-║    │  Subdomain Intel  │  v1.1  ║
-║    │  by R3XD17 ╰────────────────╯║
-╚══════════════════════════════════╝
+
+
+
+
+
+
+
+
+
+
